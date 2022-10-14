@@ -1,9 +1,9 @@
-
 use std::env;
-use std::time::{SystemTime, Duration};
-use std::sync::{Arc, Mutex};
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 extern crate structopt;
 use structopt::StructOpt;
@@ -12,22 +12,30 @@ use structopt::StructOpt;
 extern crate log;
 
 extern crate simplelog;
-use simplelog::{TermLogger, LevelFilter};
+use simplelog::{LevelFilter, TermLogger};
 
-use cargo_metadata::{Message};
+use cargo_metadata::Message;
 
-use cargo_manifest::{Manifest};
-
+use cargo_manifest::Manifest;
 
 #[derive(StructOpt)]
-#[structopt(name = "cargo-debug", about = "Cargo debug subcommand, wraps cargo invocations and launches a debugger")]
+#[structopt(
+    name = "cargo-debug",
+    about = "Cargo debug subcommand, wraps cargo invocations and launches a debugger"
+)]
 struct Options {
-
     #[structopt(default_value = "build")]
     /// Subcommand to invoke within cargo
     subcommand: String,
 
-    #[structopt(long = "debugger", default_value = "gdb")]
+    #[cfg_attr(
+        target_os = "windows",
+        structopt(long = "debugger", default_value = "devenv")
+    )]
+    #[cfg_attr(
+        target_os = "unix",
+        structopt(long = "debugger", default_value = "gdb")
+    )]
     /// Debugger to launch as a subprocess
     debugger: String,
 
@@ -52,17 +60,16 @@ struct Options {
     level: LevelFilter,
 }
 
-
 fn main() {
     // Fetch args as an array for splitting
-    let args: Vec<OsString> = env::args_os().map(|a| a ).collect();
+    let args: Vec<OsString> = env::args_os().map(|a| a).collect();
 
     println!("args: {:?}", args);
 
     // Split options by "--" as debugger configuration or passthrough to cargo
     let mut s = args.splitn(3, |v| v == "--");
     let mut config_opts = match s.next() {
-        Some(opts) => opts.iter().map(|a| a ).collect(),
+        Some(opts) => opts.iter().map(|a| a).collect(),
         None => vec![],
     };
 
@@ -74,11 +81,11 @@ fn main() {
     }
 
     let cargo_opts: Option<Vec<_>> = match s.next() {
-        Some(o) => Some(o.iter().map(|v| v.to_str().unwrap().to_string() ).collect()),
+        Some(o) => Some(o.iter().map(|v| v.to_str().unwrap().to_string()).collect()),
         None => None,
     };
     let child_opts: Option<Vec<_>> = match s.next() {
-        Some(o) => Some(o.iter().map(|v| v.to_str().unwrap().to_string() ).collect()),
+        Some(o) => Some(o.iter().map(|v| v.to_str().unwrap().to_string()).collect()),
         None => None,
     };
 
@@ -121,7 +128,7 @@ fn main() {
     }
 
     trace!("synthesized cargo command: {:?}", cargo_cmd);
-    
+
     trace!("launching cargo command");
     let mut handle = cargo_cmd.spawn().expect("error starting cargo command");
 
@@ -131,39 +138,45 @@ fn main() {
         match message.expect("Invalid cargo JSON message") {
             Message::CompilerArtifact(artifact) => {
                 artifacts.push(artifact);
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
 
     // Await command completion
-    handle.wait().expect("cargo command failed, try running the command directly");
+    handle
+        .wait()
+        .expect("cargo command failed, try running the command directly");
     trace!("command executed");
 
     // Find the output(s) we care about
-    let outputs: Vec<_> = artifacts.iter().filter_map(|a| {      
-        if let Some(x) = &a.executable {
-            return Some(x.clone())
-        }
+    let outputs: Vec<_> = artifacts
+        .iter()
+        .filter_map(|a| {
+            if let Some(x) = &a.executable {
+                return Some(x.clone());
+            }
 
-        None
-    } ).collect();
+            None
+        })
+        .collect();
     trace!("found {} outputs: {:?}", outputs.len(), outputs);
 
     // Filter / select outputs
     let bin = match o.filter {
-        Some(f) => {
-            outputs.iter().find(|p| {
+        Some(f) => outputs
+            .iter()
+            .find(|p| {
                 let file_name = p.file_name().unwrap().to_str().unwrap();
                 file_name.starts_with(&f)
-            } ).expect("no fi")
-        },
+            })
+            .expect("no fi"),
         None => {
             if outputs.len() > 1 {
                 error!("found multiple output arguments, pass --filter=X argument to select a specific output");
-                let names: Vec<_> = outputs.iter().filter_map(|o| o.file_name() ).collect();
+                let names: Vec<_> = outputs.iter().filter_map(|o| o.file_name()).collect();
                 error!("{:#?}", names);
-                return
+                return;
             }
 
             outputs.get(0).expect("no viable output artifacts found")
@@ -174,61 +187,100 @@ fn main() {
 
     let debugger = o.debugger;
 
+    let debug_path: PathBuf;
     let mut debug_args: Vec<String> = vec![];
 
-    if debugger.ends_with("gdb") {
-        // Prepare GDB to accept child options
-        if let Some(_opts) = &child_opts {
-            debug_args.push("--args".to_string());
-        }
+    match debugger.as_str() {
+        "gdb" => {
+            debug_path = PathBuf::from("gdb");
 
-        // Append command file if provided
-        if let Some(command_file) = o.command_file {
-            debug_args.push("--command".to_string());
-            debug_args.push(command_file);
-        }
+            // Prepare GDB to accept child options
+            if let Some(_opts) = &child_opts {
+                debug_args.push("--args".to_string());
+            }
 
-        // Specify file to be debugged
-        debug_args.push(bin.clone().to_str().unwrap().to_string());
+            // Append command file if provided
+            if let Some(command_file) = o.command_file {
+                debug_args.push("--command".to_string());
+                debug_args.push(command_file);
+            }
 
-        // Append child options
-        if let Some(opts) = &child_opts {
-            debug_args.append(&mut opts.clone());
-        }
-    } else if debugger.ends_with("lldb") {
-        // Specify file to be debugged
-        debug_args.push("--file".to_string());
-        debug_args.push(bin.clone().to_str().unwrap().to_string());
+            // Specify file to be debugged
+            debug_args.push(bin.clone().to_str().unwrap().to_string());
 
-        // Append command file if provided
-        if let Some(command_file) = o.command_file {
-            debug_args.push("--source".to_string());
-            debug_args.push(command_file);
+            // Append child options
+            if let Some(opts) = &child_opts {
+                debug_args.append(&mut opts.clone());
+            }
         }
+        "lldb" => {
+            debug_path = PathBuf::from("lldb");
 
-        // Append child options
-        if let Some(opts) = child_opts {
-            debug_args.push("--".to_string());
-            debug_args.append(&mut opts.clone());
+            // Specify file to be debugged
+            debug_args.push("--file".to_string());
+            debug_args.push(bin.clone().to_str().unwrap().to_string());
+
+            // Append command file if provided
+            if let Some(command_file) = o.command_file {
+                debug_args.push("--source".to_string());
+                debug_args.push(command_file);
+            }
+
+            // Append child options
+            if let Some(opts) = child_opts {
+                debug_args.push("--".to_string());
+                debug_args.append(&mut opts.clone());
+            }
         }
-    } else if debugger.ends_with("gdbserver") {
-        if let Some(address) = o.address {
-            debug_args.push(address);
-        } else {
-            error!("--address is required when gdbserver is used");
+        "gdbserver" => {
+            debug_path = PathBuf::from("gdbserver");
+
+            if let Some(address) = o.address {
+                debug_args.push(address);
+            } else {
+                error!("--address is required when gdbserver is used");
+                std::process::exit(1);
+            }
+            // Specify file to be debugged
+            debug_args.push(bin.clone().to_str().unwrap().to_string());
+
+            // Append child options
+            if let Some(opts) = child_opts {
+                debug_args.append(&mut opts.clone());
+            }
+        }
+        "devenv" => {
+            // Find the path to devenv
+            let install_info = vswhere::Config::new()
+                .only_latest_versions(true)
+                .run_default_path()
+                .unwrap();
+
+            let info = install_info.iter().find(|m| {
+                m.product_id()
+                    .starts_with("Microsoft.VisualStudio.Product.")
+            });
+
+            if let Some(info) = info {
+                debug_path = info.product_path().to_owned();
+                debug_args.push("/DebugExe".to_string());
+
+                // Specify file to be debugged
+                debug_args.push(bin.clone().to_str().unwrap().to_string());
+
+                // Append child options
+                if let Some(opts) = &child_opts {
+                    debug_args.append(&mut opts.clone());
+                }
+            } else {
+                error!("Could not find a compatible version of Visual Studio :(");
+                std::process::exit(1);
+            }
+        }
+        _ => {
+            error!("unsupported or unrecognised debugger {}", debugger);
             std::process::exit(1);
         }
-        // Specify file to be debugged
-        debug_args.push(bin.clone().to_str().unwrap().to_string());
-        
-        // Append child options
-        if let Some(opts) = child_opts {
-            debug_args.append(&mut opts.clone());
-        }
-        
-    } else {
-        error!("unsupported or unrecognised debugger {}", debugger);
-        return;
     }
 
     trace!("synthesized debug arguments: {:?}", debug_args);
@@ -236,7 +288,7 @@ fn main() {
     if o.no_run {
         trace!("no-run selected, exiting");
         println!("Debug command: ");
-        println!("{} {}", &debugger, debug_args.join(" "));
+        println!("{} {}", debug_path.display(), debug_args.join(" "));
         std::process::exit(0);
     }
 
@@ -253,19 +305,18 @@ fn main() {
         } else {
             *then = now;
         }
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
-
-    let mut debug_cmd = Command::new(&debugger);
+    let mut debug_cmd = Command::new(&debug_path);
     debug_cmd.args(debug_args);
 
     trace!("synthesized debug command: {:?}", debug_cmd);
-    
+
     debug_cmd.status().expect("error running debug command");
 
     trace!("debug command done");
 }
-
 
 #[cfg(test)]
 mod test {

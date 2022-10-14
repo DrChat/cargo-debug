@@ -4,7 +4,7 @@ description = "a subcommand for cargo to launch a debugger with the generated ou
 version = "0.3.0"
 authors = ["Ryan Kurte <ryankurte@gmail.com>"]
 repository = "https://github.com/ryankurte/cargo-debug"
-edition = "2018"
+edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
@@ -14,3 +14,5 @@ simplelog = "0.5.3"
 cargo_metadata = "0.7.4"
 cargo-manifest = "0.2.9"
 ctrlc = { version="3.1.1", features=["termination"] }
+vswhere = { git = "https://github.com/DrChat/vswhere-rs.git" }
+anyhow = "1.0.65"
