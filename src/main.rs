@@ -72,6 +72,7 @@ fn main() -> Result<()> {
                 Arg::new("release")
                     .long("release")
                     .action(clap::ArgAction::SetTrue),
+                Arg::new("example").long("example").num_args(1),
                 Arg::new("bin").long("bin").num_args(1),
                 Arg::new("options").num_args(1..).trailing_var_arg(true),
             ]),
@@ -102,6 +103,11 @@ fn main() -> Result<()> {
     let bin = matches.get_one::<String>("bin");
     if let Some(bin) = &bin {
         cargo_cmd.args(["--bin", bin]);
+    }
+
+    let example = matches.get_one::<String>("example");
+    if let Some(example) = &example {
+        cargo_cmd.args(["--example", example]);
     }
 
     trace!("synthesized cargo command: {:?}", cargo_cmd);
