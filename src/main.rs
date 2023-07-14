@@ -72,6 +72,7 @@ fn main() -> Result<()> {
                 Arg::new("release")
                     .long("release")
                     .action(clap::ArgAction::SetTrue),
+                Arg::new("manifest").long("manifest-path").num_args(1),
                 Arg::new("example").long("example").num_args(1),
                 Arg::new("bin").long("bin").num_args(1),
                 Arg::new("options").num_args(1..).trailing_var_arg(true),
@@ -98,6 +99,10 @@ fn main() -> Result<()> {
 
     if matches.get_flag("release") {
         cargo_cmd.arg("--release");
+    }
+
+    if let Some(manifest) = matches.get_one::<String>("manifest") {
+        cargo_cmd.args(["--manifest-path", manifest]);
     }
 
     let bin = matches.get_one::<String>("bin");
