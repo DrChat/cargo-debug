@@ -5,8 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-use clap::builder::PossibleValuesParser;
-use clap::Arg;
+use clap::Parser;
 use log::{error, info, trace, warn};
 
 use cargo_metadata::Message;
@@ -56,36 +55,56 @@ struct Options {
 }
 */
 
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum Debugger {
+    Gdb,
+    Gdbserver,
+    Lldb,
+    Devenv,
+    Windbg,
+}
+
+impl std::default::Default for Debugger {
+    fn default() -> Self {
+        if cfg!(unix) {
+            Debugger::Gdb
+        } else if cfg!(windows) {
+            Debugger::Devenv
+        } else {
+            panic!("no default debugger");
+        }
+    }
+}
+
+#[derive(clap::Args)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    debugger: Option<Debugger>,
+    #[clap(long)]
+    release: bool,
+    #[clap(long = "manifest-path")]
+    manifest: Option<String>,
+    #[clap(long = "example")]
+    example: Option<String>,
+    #[clap(long = "bin")]
+    bin: Option<String>,
+    #[clap(last = true)]
+    options: Vec<String>,
+}
+
+#[derive(Parser)]
+#[command(name = "cargo")]
+#[command(bin_name = "cargo")]
+enum CargoCli {
+    Debug(Args),
+}
+
 fn main() -> Result<()> {
     // TermLogger::init(log::LevelFilter::Debug, simplelog::Config::default()).unwrap();
 
-    let matches = clap::Command::new("cargo")
-        .bin_name("cargo")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author("Justin Moore")
-        .about("Build and run a binary under a debugger")
-        .subcommand(
-            clap::Command::new("debug").args([
-                Arg::new("debugger")
-                    .num_args(1)
-                    .value_parser(PossibleValuesParser::new(["gdb", "devenv"])),
-                Arg::new("release")
-                    .long("release")
-                    .action(clap::ArgAction::SetTrue),
-                Arg::new("manifest").long("manifest-path").num_args(1),
-                Arg::new("example").long("example").num_args(1),
-                Arg::new("bin").long("bin").num_args(1),
-                Arg::new("options").num_args(1..).trailing_var_arg(true),
-            ]),
-        )
-        .get_matches();
+    let CargoCli::Debug(args) = CargoCli::parse();
 
-    let matches = match matches.subcommand() {
-        Some(("debug", matches)) => matches,
-        _ => unreachable!("invalid subcommand"),
-    };
-
-    let options = matches.get_many::<String>("options");
+    let options = args.options;
 
     trace!("building cargo command");
 
@@ -97,21 +116,19 @@ fn main() -> Result<()> {
         .args(["build", "--message-format=json"])
         .stdout(Stdio::piped());
 
-    if matches.get_flag("release") {
+    if args.release {
         cargo_cmd.arg("--release");
     }
 
-    if let Some(manifest) = matches.get_one::<String>("manifest") {
-        cargo_cmd.args(["--manifest-path", manifest]);
+    if let Some(manifest) = args.manifest {
+        cargo_cmd.args(["--manifest-path", &manifest]);
     }
 
-    let bin = matches.get_one::<String>("bin");
-    if let Some(bin) = &bin {
+    if let Some(bin) = &args.bin {
         cargo_cmd.args(["--bin", bin]);
     }
 
-    let example = matches.get_one::<String>("example");
-    if let Some(example) = &example {
+    if let Some(example) = &args.example {
         cargo_cmd.args(["--example", example]);
     }
 
@@ -122,7 +139,8 @@ fn main() -> Result<()> {
 
     // Log all output artifacts
     let mut artifacts = vec![];
-    for message in cargo_metadata::parse_messages(handle.stdout.take().unwrap()) {
+    let reader = std::io::BufReader::new(handle.stdout.take().unwrap());
+    for message in Message::parse_stream(reader) {
         match message.expect("Invalid cargo JSON message") {
             Message::CompilerArtifact(artifact) => {
                 artifacts.push(artifact);
@@ -158,7 +176,7 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let bin = if let Some(binary) = &bin {
+    let bin = if let Some(binary) = &args.bin {
         if let Some(bin) = binaries.iter().find_map(|(target, exe)| {
             if target.name == **binary {
                 Some(exe.clone())
@@ -166,7 +184,7 @@ fn main() -> Result<()> {
                 None
             }
         }) {
-            bin
+            bin.to_string()
         } else {
             println!("Could not find binary artifact {binary}");
             std::process::exit(1);
@@ -174,7 +192,7 @@ fn main() -> Result<()> {
     } else {
         // Try and find the first binary. If more than one, return an error.
         if binaries.len() == 1 {
-            binaries[0].1.clone()
+            binaries[0].1.clone().to_string()
         } else {
             println!(
                 "More than one binary artifact produced, please explicitly specify the binary."
@@ -185,27 +203,17 @@ fn main() -> Result<()> {
 
     info!("selected binary: {:?}", bin);
 
-    let debugger = if let Some(dbg) = matches.get_one::<String>("debugger") {
-        dbg.as_str()
-    } else {
-        if cfg!(unix) {
-            "gdb"
-        } else if cfg!(windows) {
-            "devenv"
-        } else {
-            panic!("no default debugger");
-        }
-    };
+    let debugger = args.debugger.unwrap_or_default();
 
     let debug_path: PathBuf;
     let mut debug_args: Vec<String> = vec![];
 
     match debugger {
-        "gdb" => {
+        Debugger::Gdb => {
             debug_path = PathBuf::from("gdb");
 
             // Prepare GDB to accept child options
-            if options.is_some() {
+            if !options.is_empty() {
                 debug_args.push("--args".to_string());
             }
 
@@ -218,19 +226,17 @@ fn main() -> Result<()> {
             */
 
             // Specify file to be debugged
-            debug_args.push(bin.clone().to_str().unwrap().to_string());
+            debug_args.push(bin.clone());
 
             // Append child options
-            if let Some(opts) = options {
-                debug_args.extend(opts.cloned());
-            }
+            debug_args.extend(options.iter().cloned());
         }
-        "lldb" => {
+        Debugger::Lldb => {
             debug_path = PathBuf::from("lldb");
 
             // Specify file to be debugged
             debug_args.push("--file".to_string());
-            debug_args.push(bin.clone().to_str().unwrap().to_string());
+            debug_args.push(bin.clone());
 
             // Append command file if provided
             /*
@@ -241,12 +247,12 @@ fn main() -> Result<()> {
             */
 
             // Append child options
-            if let Some(opts) = options {
+            if !options.is_empty() {
                 debug_args.push("--".to_string());
-                debug_args.extend(opts.cloned());
+                debug_args.extend(options.iter().cloned());
             }
         }
-        "gdbserver" => {
+        Debugger::Gdbserver => {
             debug_path = PathBuf::from("gdbserver");
 
             /*
@@ -258,14 +264,14 @@ fn main() -> Result<()> {
             }
             */
             // Specify file to be debugged
-            debug_args.push(bin.clone().to_str().unwrap().to_string());
+            debug_args.push(bin.clone());
 
             // Append child options
-            if let Some(opts) = options {
-                debug_args.extend(opts.cloned());
+            if !options.is_empty() {
+                debug_args.extend(options.iter().cloned());
             }
         }
-        "devenv" => {
+        Debugger::Devenv => {
             // Find the path to devenv
             let install_info = vswhere::Config::new()
                 .only_latest_versions(true)
@@ -282,20 +288,29 @@ fn main() -> Result<()> {
                 debug_args.push("/DebugExe".to_string());
 
                 // Specify file to be debugged
-                debug_args.push(bin.clone().to_str().unwrap().to_string());
+                debug_args.push(bin.clone());
 
                 // Append child options
-                if let Some(opts) = options {
-                    debug_args.extend(opts.cloned());
+                if !options.is_empty() {
+                    debug_args.extend(options.iter().cloned());
                 }
             } else {
                 error!("Could not find a compatible version of Visual Studio :(");
                 std::process::exit(1);
             }
         }
-        _ => {
-            error!("unsupported or unrecognised debugger {}", debugger);
-            std::process::exit(1);
+        Debugger::Windbg => {
+            debug_path = PathBuf::from("windbgx");
+
+            debug_args.push("-o".to_string());
+
+            // Specify file to be debugged
+            debug_args.push(bin.clone());
+
+            // Append child options
+            if !options.is_empty() {
+                debug_args.extend(options.iter().cloned());
+            }
         }
     }
 
