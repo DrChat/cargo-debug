@@ -272,31 +272,38 @@ fn main() -> Result<()> {
             }
         }
         Debugger::Devenv => {
-            // Find the path to devenv
-            let install_info = vswhere::Config::new()
-                .only_latest_versions(true)
-                .run_default_path()
-                .unwrap();
+            #[cfg(target_os = "windows")]
+            {
+                // Find the path to devenv
+                let install_info = vswhere::Config::new()
+                    .only_latest_versions(true)
+                    .run_default_path()
+                    .unwrap();
 
-            let info = install_info.iter().find(|m| {
-                m.product_id()
-                    .starts_with("Microsoft.VisualStudio.Product.")
-            });
+                let info = install_info.iter().find(|m| {
+                    m.product_id()
+                        .starts_with("Microsoft.VisualStudio.Product.")
+                });
 
-            if let Some(info) = info {
-                debug_path = info.product_path().to_owned();
-                debug_args.push("/DebugExe".to_string());
+                if let Some(info) = info {
+                    debug_path = info.product_path().to_owned();
+                    debug_args.push("/DebugExe".to_string());
 
-                // Specify file to be debugged
-                debug_args.push(bin.clone());
+                    // Specify file to be debugged
+                    debug_args.push(bin.clone());
 
-                // Append child options
-                if !options.is_empty() {
-                    debug_args.extend(options.iter().cloned());
+                    // Append child options
+                    if !options.is_empty() {
+                        debug_args.extend(options.iter().cloned());
+                    }
+                } else {
+                    error!("Could not find a compatible version of Visual Studio :(");
+                    std::process::exit(1);
                 }
-            } else {
-                error!("Could not find a compatible version of Visual Studio :(");
-                std::process::exit(1);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                panic!("devenv is only available on Windows");
             }
         }
         Debugger::Windbg => {
