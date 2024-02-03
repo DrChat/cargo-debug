@@ -9,51 +9,6 @@ use clap::Parser;
 use log::{error, info, trace, warn};
 
 use cargo_metadata::Message;
-// use simplelog::TermLogger;
-
-/*
-#[derive(StructOpt)]
-#[structopt(
-    name = "cargo-debug",
-    about = "Cargo debug subcommand, wraps cargo invocations and launches a debugger"
-)]
-struct Options {
-    #[structopt(default_value = "build")]
-    /// Subcommand to invoke within cargo
-    subcommand: String,
-
-    #[cfg_attr(
-        target_os = "windows",
-        structopt(long = "debugger", default_value = "devenv")
-    )]
-    #[cfg_attr(
-        target_os = "unix",
-        structopt(long = "debugger", default_value = "gdb")
-    )]
-    /// Debugger to launch as a subprocess
-    debugger: String,
-
-    #[structopt(long = "command-file")]
-    /// Command file to be passed to debugger
-    command_file: Option<String>,
-
-    #[structopt(long = "address")]
-    /// Address to be passed to gdbserver. Required only for gdbserver
-    address: Option<String>,
-
-    #[structopt(long = "filter")]
-    /// Filter to match against multiple output files
-    filter: Option<String>,
-
-    #[structopt(long = "no-run")]
-    /// Print the debug command to the terminal and exit without running
-    no_run: bool,
-
-    #[structopt(long = "log-level", default_value = "info")]
-    /// Enable verbose logging
-    level: LevelFilter,
-}
-*/
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum Debugger {
